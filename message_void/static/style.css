@@ -1,0 +1,128 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0f1419;
+  --panel: #161b22;
+  --panel-2: #1c222b;
+  --border: #2a313c;
+  --text: #d8dee9;
+  --muted: #8b95a3;
+  --accent: #5b8def;
+  --danger: #ef5b5b;
+  --ok: #5bef9b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.02em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover { border-color: var(--accent); }
+button.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+.status {
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+.status.connected { color: var(--ok); }
+.status.disconnected { color: var(--danger); }
+
+main {
+  display: grid;
+  grid-template-columns: 220px 360px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+aside, #messages, #detail { overflow: auto; }
+
+aside {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 12px;
+}
+aside h2, aside h3 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+
+#channel-list, .endpoints ul { list-style: none; padding: 0; margin: 0 0 16px; }
+#channel-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+#channel-list li:hover { background: var(--panel-2); }
+#channel-list li.active { background: var(--panel-2); color: var(--accent); }
+.count { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.endpoints { font-size: 11px; color: var(--muted); }
+.endpoints ul ul { margin-left: 8px; }
+.endpoints code { color: var(--text); background: var(--panel-2); padding: 1px 4px; border-radius: 3px; }
+
+#messages { background: var(--bg); border-right: 1px solid var(--border); }
+#message-list { list-style: none; padding: 0; margin: 0; }
+#message-list li {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+#message-list li:hover { background: var(--panel-2); }
+#message-list li.active { background: var(--panel-2); border-left: 3px solid var(--accent); padding-left: 11px; }
+#message-list .row1 { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+#message-list .channel { color: var(--accent); font-weight: 600; text-transform: lowercase; }
+#message-list .time { color: var(--muted); }
+#message-list .summary { font-weight: 600; margin-top: 2px; }
+#message-list .preview { color: var(--muted); margin-top: 2px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#detail { padding: 16px; }
+#detail .empty { color: var(--muted); text-align: center; margin-top: 40px; }
+#detail h2 { font-size: 14px; margin: 0 0 12px; display: flex; justify-content: space-between; align-items: center; }
+#detail dl { display: grid; grid-template-columns: 100px 1fr; gap: 4px 12px; margin: 0 0 16px; font-size: 13px; }
+#detail dt { color: var(--muted); }
+#detail dd { margin: 0; word-break: break-word; }
+#detail .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+#detail .tabs button { border-radius: 4px 4px 0 0; border-bottom: none; }
+#detail .tabs button.active { background: var(--bg); color: var(--accent); border-color: var(--border); }
+#detail pre {
+  background: var(--panel);
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+}
+#detail iframe { width: 100%; min-height: 60vh; background: white; border: 1px solid var(--border); border-radius: 4px; }

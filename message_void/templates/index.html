@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Message Void</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <h1>Message Void</h1>
+    <div class="header-actions">
+      <span id="status" class="status">connecting&hellip;</span>
+      <button id="refresh">Refresh</button>
+      <button id="clear" class="danger">Clear all</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <h2>Channels</h2>
+      <ul id="channel-list">
+        <li data-channel="" class="active">All <span class="count" id="count-total">0</span></li>
+        {% for channel in channels %}
+          <li data-channel="{{ channel.name }}" title="{{ channel.description }}">
+            {{ channel.name }} <span class="count" id="count-{{ channel.name }}">0</span>
+          </li>
+        {% endfor %}
+      </ul>
+      <div class="endpoints">
+        <h3>Endpoints</h3>
+        <ul>
+          {% for channel in channels %}
+            <li><strong>{{ channel.name }}</strong>
+              <ul>
+                {% for ep in channel.endpoints %}<li><code>{{ ep }}</code></li>{% endfor %}
+              </ul>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </aside>
+
+    <section id="messages">
+      <ol id="message-list"></ol>
+    </section>
+
+    <section id="detail">
+      <p class="empty">Select a message to view its contents.</p>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

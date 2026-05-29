@@ -1,0 +1,14 @@
+services:
+  message-void:
+    build: .
+    image: message-void:latest
+    container_name: message-void
+    restart: unless-stopped
+    ports:
+      - "5000:5000"   # Flask API + UI
+      - "5025:1025"   # SMTP capture
+    environment:
+      MESSAGE_VOID_MAX_MESSAGES: "1000"
+
+
+

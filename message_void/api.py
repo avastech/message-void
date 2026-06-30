@@ -46,6 +46,29 @@ def delete_message(message_id: str):
     return jsonify({"deleted": message_id})
 
 
+@api_bp.post("/messages/<message_id>/reply")
+def reply_message(message_id: str):
+    """Simulate a user replying to a captured message (delivers inbound to the app)."""
+    from .channels.base import ReplyError
+    from .reply import dispatch_reply
+
+    msg = store.get(message_id)
+    if msg is None:
+        return jsonify({"error": "not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    text = data.get("text")
+    if not text or not str(text).strip():
+        return jsonify({"error": "text is required"}), 400
+
+    opts = {k: v for k, v in data.items() if k != "text"}
+    try:
+        result = dispatch_reply(msg, str(text), opts)
+    except ReplyError as exc:
+        return jsonify({"error": str(exc)}), exc.status
+    return jsonify(result)
+
+
 @api_bp.delete("/messages")
 def clear_messages():
     channel = request.args.get("channel") or None
@@ -66,12 +89,78 @@ def channels_summary():
                     "description": c.description,
                     "endpoints": c.endpoints,
                     "count": counts.get(c.name, 0),
+                    "reply": c.supports_reply(),
+                    "reply_setup": c.reply_setup,
                 }
                 for c in channels_pkg.all_channels()
             ],
             "total": store.total(),
         }
     )
+
+
+@api_bp.get("/settings")
+def get_settings():
+    """Per-channel configurable settings with their current value and source."""
+    from . import channels as channels_pkg
+    from . import config
+
+    def describe(s):
+        locked = config.is_locked(s.key)
+        src = config.source(s.key)
+        out = {
+            "key": s.key,
+            "label": s.label,
+            "secret": s.secret,
+            "help": s.help,
+            "locked": locked,
+            "source": src,
+        }
+        if s.secret:
+            out["set"] = src != "unset"  # never expose the secret value itself
+            out["value"] = ""
+        else:
+            out["value"] = config.get(s.key) or ""
+        return out
+
+    return jsonify(
+        {
+            "channels": [
+                {
+                    "name": c.name,
+                    "settings": [describe(s) for s in c.settings],
+                }
+                for c in channels_pkg.all_channels()
+                if c.settings
+            ]
+        }
+    )
+
+
+@api_bp.put("/settings")
+def update_settings():
+    """Set (or clear) runtime overrides for settings not pinned by an env var."""
+    from . import channels as channels_pkg
+    from . import config
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "expected a JSON object of key->value"}), 400
+
+    known = {s.key for c in channels_pkg.all_channels() for s in c.settings}
+    applied, rejected = [], []
+    for key, value in data.items():
+        if key not in known:
+            rejected.append({"key": key, "reason": "unknown setting"})
+            continue
+        if config.is_locked(key):
+            rejected.append({"key": key, "reason": "pinned by environment variable"})
+            continue
+        config.set_override(key, None if value is None else str(value))
+        applied.append(key)
+
+    status = 400 if rejected and not applied else 200
+    return jsonify({"applied": applied, "rejected": rejected}), status
 
 
 @api_bp.get("/stream")

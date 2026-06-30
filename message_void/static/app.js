@@ -4,12 +4,17 @@
     messages: [],
     selectedId: null,
     activeTab: "preview",
+    replyChannels: new Set(),
   };
+
+  const isInbound = (m) => m.extra && m.extra.direction === "inbound";
 
   const els = {
     status: document.getElementById("status"),
     refresh: document.getElementById("refresh"),
     clear: document.getElementById("clear"),
+    settingsBtn: document.getElementById("settings-btn"),
+    settings: document.getElementById("settings"),
     channelList: document.getElementById("channel-list"),
     messageList: document.getElementById("message-list"),
     detail: document.getElementById("detail"),
@@ -48,7 +53,7 @@
       .map(
         (m) => `
         <li data-id="${m.id}" class="${m.id === state.selectedId ? "active" : ""}">
-          <div class="row1"><span class="channel">${escapeHtml(m.channel)}</span><span class="time">${fmtTime(m.received_at)}</span></div>
+          <div class="row1"><span class="channel">${escapeHtml(m.channel)}${isInbound(m) ? ' <span class="badge">inbound</span>' : ""}</span><span class="time">${fmtTime(m.received_at)}</span></div>
           <div class="summary">${escapeHtml(summaryText(m))}</div>
           <div class="preview">${escapeHtml(summaryAddress(m) + " · " + (m.preview || ""))}</div>
         </li>`
@@ -99,8 +104,10 @@
       </dl>
       <div class="tabs">${tabButtons}</div>
       <div id="tab-content"></div>
+      ${replyBox(m)}
     `;
     renderTab(m);
+    wireReply(m);
 
     document.getElementById("delete-msg").onclick = async () => {
       await fetch(`/api/messages/${m.id}`, { method: "DELETE" });
@@ -115,6 +122,55 @@
         renderDetail();
       };
     });
+  }
+
+  function replyBox(m) {
+    if (isInbound(m) || !state.replyChannels.has(m.channel)) return "";
+    return `
+      <div class="reply">
+        <h3>Simulate a user reply</h3>
+        <p class="reply-hint">Delivers an inbound ${escapeHtml(m.channel)} event to your app, as if the recipient replied.</p>
+        <textarea id="reply-text" placeholder="Type the reply the user would send back…"></textarea>
+        <div class="reply-actions">
+          <button id="send-reply">Send reply to app</button>
+          <span id="reply-status" class="reply-status"></span>
+        </div>
+      </div>`;
+  }
+
+  function wireReply(m) {
+    const btn = document.getElementById("send-reply");
+    if (!btn) return;
+    const textEl = document.getElementById("reply-text");
+    const statusEl = document.getElementById("reply-status");
+    btn.onclick = async () => {
+      const text = (textEl.value || "").trim();
+      if (!text) { textEl.focus(); return; }
+      btn.disabled = true;
+      statusEl.textContent = "sending…";
+      statusEl.className = "reply-status";
+      try {
+        const res = await fetch(`/api/messages/${m.id}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = data.error || `error ${res.status}`;
+          statusEl.className = "reply-status err";
+        } else {
+          statusEl.textContent = `delivered → app responded ${data.app_status}`;
+          statusEl.className = "reply-status ok";
+          textEl.value = "";
+        }
+      } catch (e) {
+        statusEl.textContent = String(e);
+        statusEl.className = "reply-status err";
+      } finally {
+        btn.disabled = false;
+      }
+    };
   }
 
   function renderTab(m) {
@@ -132,6 +188,18 @@
       c.innerHTML = `<pre>${escapeHtml((m.body && m.body.raw) || "")}</pre>`;
     } else {
       c.innerHTML = `<pre>${escapeHtml(JSON.stringify(m.body, null, 2))}</pre>`;
+    }
+  }
+
+  async function loadChannels() {
+    try {
+      const res = await fetch("/api/channels");
+      const data = await res.json();
+      state.replyChannels = new Set(
+        (data.channels || []).filter((c) => c.reply).map((c) => c.name)
+      );
+    } catch {
+      /* capabilities are best-effort; reply box just won't show */
     }
   }
 
@@ -177,8 +245,119 @@
     });
   }
 
+  function toggleSettings(open) {
+    els.settings.classList.toggle("hidden", !open);
+    if (open) loadSettingsForms();
+  }
+
+  function settingField(s) {
+    const id = "set-" + s.key;
+    const note = s.locked
+      ? `<span class="setting-note locked">set via env var</span>`
+      : s.source === "runtime"
+      ? `<span class="setting-note ok">set here</span>`
+      : "";
+    let placeholder = "";
+    if (s.secret) {
+      placeholder = s.set ? "•••••••• (set — leave blank to keep)" : "not set";
+    } else if (!s.value && !s.locked) {
+      placeholder = "not set";
+    }
+    return `
+      <div class="setting-field">
+        <label for="${id}">${escapeHtml(s.label)} ${note}</label>
+        <input id="${id}" type="${s.secret ? "password" : "text"}"
+               data-key="${escapeHtml(s.key)}" data-secret="${s.secret ? "1" : ""}"
+               value="${escapeHtml(s.secret ? "" : s.value)}"
+               placeholder="${escapeHtml(placeholder)}"
+               ${s.locked ? "disabled" : ""} autocomplete="off" />
+        ${s.help ? `<p class="setting-help">${escapeHtml(s.help)}</p>` : ""}
+      </div>`;
+  }
+
+  function renderSettingsForm(container, channelSettings) {
+    const allLocked = channelSettings.every((s) => s.locked);
+    container.innerHTML = `
+      ${channelSettings.map(settingField).join("")}
+      <div class="setting-actions">
+        <button class="setting-save"${allLocked ? " disabled" : ""}>Save</button>
+        <span class="setting-status"></span>
+      </div>`;
+    const btn = container.querySelector(".setting-save");
+    const statusEl = container.querySelector(".setting-status");
+    if (!btn) return;
+    btn.onclick = async () => {
+      const updates = {};
+      container.querySelectorAll("input[data-key]").forEach((inp) => {
+        if (inp.disabled) return;
+        const secret = inp.dataset.secret === "1";
+        const val = inp.value;
+        // Secrets left blank mean "keep current"; everything else is sent verbatim.
+        if (secret && val === "") return;
+        updates[inp.dataset.key] = val;
+      });
+      if (!Object.keys(updates).length) {
+        statusEl.textContent = "nothing to save";
+        statusEl.className = "setting-status";
+        return;
+      }
+      btn.disabled = true;
+      statusEl.textContent = "saving…";
+      statusEl.className = "setting-status";
+      try {
+        const res = await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = (data.rejected || []).map((r) => `${r.key}: ${r.reason}`).join("; ") || `error ${res.status}`;
+          statusEl.className = "setting-status err";
+        } else {
+          statusEl.textContent = "saved";
+          statusEl.className = "setting-status ok";
+          await loadSettingsForms(); // reflect new source/locked state
+          await loadChannels(); // a newly-configured channel may now reply
+        }
+      } catch (e) {
+        statusEl.textContent = String(e);
+        statusEl.className = "setting-status err";
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  }
+
+  async function loadSettingsForms() {
+    const containers = document.querySelectorAll(".setup-settings[data-settings-for]");
+    if (!containers.length) return;
+    try {
+      const res = await fetch("/api/settings");
+      const data = await res.json();
+      const byChannel = {};
+      for (const c of data.channels || []) byChannel[c.name] = c.settings;
+      containers.forEach((el) => {
+        const settings = byChannel[el.dataset.settingsFor];
+        if (settings) renderSettingsForm(el, settings);
+        else el.innerHTML = "";
+      });
+    } catch {
+      containers.forEach((el) => {
+        el.innerHTML = `<p class="setup-desc">Couldn't load settings.</p>`;
+      });
+    }
+  }
+
   els.refresh.onclick = loadMessages;
   els.clear.onclick = clearAll;
+  els.settingsBtn.onclick = () => toggleSettings(true);
+  els.settings.addEventListener("click", (e) => {
+    if (e.target.hasAttribute("data-close")) toggleSettings(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !els.settings.classList.contains("hidden")) toggleSettings(false);
+  });
   els.channelList.addEventListener("click", (e) => {
     const li = e.target.closest("li");
     if (li) selectChannel(li.dataset.channel || "");
@@ -193,6 +372,6 @@
     }
   });
 
-  loadMessages();
+  loadChannels().then(loadMessages);
   connectStream();
 })();

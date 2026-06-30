@@ -1,10 +1,15 @@
 """Capture Discord webhook posts and bot-API channel messages."""
 from __future__ import annotations
 
+import json
+import time
+import uuid
+
 from flask import Blueprint, jsonify, request
 
+from .. import config
 from ..storage import Message, store
-from .base import Channel, register
+from .base import Channel, PushReply, ReplyError, Setting, register
 
 
 class DiscordChannel(Channel):
@@ -13,6 +18,18 @@ class DiscordChannel(Channel):
     endpoints = [
         "POST /discord/api/webhooks/<id>/<token>",
         "POST /discord/api/v<n>/channels/<channel_id>/messages",
+    ]
+    reply_setup = [
+        "MESSAGE_VOID_DISCORD_INBOUND_URL — POSTs a MESSAGE_CREATE event",
+        "Real Discord uses the gateway websocket; this is an HTTP receiver only",
+        "Webhook-origin captures carry no channel — pass channel_id in the reply",
+    ]
+    settings = [
+        Setting(
+            "MESSAGE_VOID_DISCORD_INBOUND_URL",
+            "Inbound URL",
+            help="HTTP receiver for a MESSAGE_CREATE event",
+        ),
     ]
 
     def blueprint(self) -> Blueprint:
@@ -61,6 +78,59 @@ class DiscordChannel(Channel):
             return jsonify({"id": "0", "channel_id": channel_id, "content": content})
 
         return bp
+
+    def supports_reply(self) -> bool:
+        return True
+
+    def build_reply(self, original: Message, text: str, opts: dict) -> PushReply:
+        """Build a Discord ``MESSAGE_CREATE`` gateway event for a user reply.
+
+        NOTE: real Discord delivers messages over the gateway **websocket**, which
+        this dev tool doesn't emulate. This POSTs the same event payload to an HTTP
+        receiver you configure — handy if your test setup exposes an HTTP shim for
+        inbound Discord events, but it does not match Discord's real transport.
+        """
+        url = opts.get("url") or config.get("MESSAGE_VOID_DISCORD_INBOUND_URL")
+        if not url:
+            raise ReplyError(
+                "no Discord inbound URL configured "
+                "(set MESSAGE_VOID_DISCORD_INBOUND_URL or pass `url`)",
+                400,
+            )
+
+        channel_id = opts.get("channel_id") or original.summary.get("channel_id")
+        if not channel_id:
+            raise ReplyError(
+                "no Discord channel_id to reply into "
+                "(webhook captures carry none — pass `channel_id`)",
+                400,
+            )
+
+        snowflake = str(int(time.time() * 1000))
+        payload = {
+            "t": "MESSAGE_CREATE",
+            "op": 0,
+            "s": None,
+            "d": {
+                "id": snowflake,
+                "channel_id": str(channel_id),
+                "content": text,
+                "author": {
+                    "id": opts.get("user_id", "100000000000000000"),
+                    "username": opts.get("username", "user"),
+                    "bot": False,
+                },
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                "nonce": uuid.uuid4().hex,
+            },
+        }
+        return PushReply(
+            url=url,
+            body=json.dumps(payload).encode(),
+            content_type="application/json",
+            summary={"kind": "message", "channel_id": str(channel_id), "text": text[:120]},
+            preview=text,
+        )
 
 
 def _payload() -> dict:

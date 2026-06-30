@@ -9,18 +9,38 @@ in laravel-notification-channels/telegram) to::
 """
 from __future__ import annotations
 
+import json
 import time
 
 from flask import Blueprint, jsonify, request
 
+from .. import config
 from ..storage import Message, store
-from .base import Channel, register
+from .base import Channel, PushReply, ReplyError, Setting, register
 
 
 class TelegramChannel(Channel):
     name = "telegram"
     description = "Telegram bot API (laravel-notification-channels/telegram)"
     endpoints = ["POST /telegram/bot<TOKEN>/<method>"]
+    reply_setup = [
+        "MESSAGE_VOID_TELEGRAM_INBOUND_URL — your bot's webhook URL",
+        "MESSAGE_VOID_TELEGRAM_SECRET_TOKEN (optional) — X-Telegram-Bot-Api-Secret-Token",
+        "Webhook mode only — long-polling (getUpdates) apps won't receive it",
+    ]
+    settings = [
+        Setting(
+            "MESSAGE_VOID_TELEGRAM_INBOUND_URL",
+            "Inbound URL",
+            help="Your bot's webhook URL",
+        ),
+        Setting(
+            "MESSAGE_VOID_TELEGRAM_SECRET_TOKEN",
+            "Secret token",
+            secret=True,
+            help="Optional — sent as X-Telegram-Bot-Api-Secret-Token",
+        ),
+    ]
 
     def blueprint(self) -> Blueprint:
         bp = Blueprint("telegram", __name__, url_prefix="/telegram")
@@ -63,6 +83,60 @@ class TelegramChannel(Channel):
             )
 
         return bp
+
+    def supports_reply(self) -> bool:
+        return True
+
+    def build_reply(self, original: Message, text: str, opts: dict) -> PushReply:
+        """Build a Telegram ``Update`` for a user replying in the same chat.
+
+        Delivers to the bot's **webhook** URL (the app must use ``setWebhook``;
+        long-polling ``getUpdates`` apps won't receive this). When a secret token
+        is configured it's sent as ``X-Telegram-Bot-Api-Secret-Token``.
+        """
+        url = opts.get("url") or config.get("MESSAGE_VOID_TELEGRAM_INBOUND_URL")
+        if not url:
+            raise ReplyError(
+                "no Telegram inbound URL configured "
+                "(set MESSAGE_VOID_TELEGRAM_INBOUND_URL or pass `url`)",
+                400,
+            )
+
+        body = original.body or {}
+        chat_id = opts.get("chat_id") or body.get("chat_id") or original.summary.get("chat_id")
+        try:
+            user_id = int(chat_id)
+        except (TypeError, ValueError):
+            user_id = 0
+        now = int(time.time())
+        update = {
+            "update_id": now,
+            "message": {
+                "message_id": now % 2**31,
+                "from": {
+                    "id": user_id,
+                    "is_bot": False,
+                    "first_name": opts.get("first_name", "User"),
+                },
+                "chat": {"id": chat_id, "type": "private"},
+                "date": now,
+                "text": text,
+            },
+        }
+
+        headers = {}
+        secret = opts.get("secret_token") or config.get("MESSAGE_VOID_TELEGRAM_SECRET_TOKEN")
+        if secret:
+            headers["X-Telegram-Bot-Api-Secret-Token"] = secret
+
+        return PushReply(
+            url=url,
+            body=json.dumps(update).encode(),
+            content_type="application/json",
+            headers=headers,
+            summary={"method": "update", "chat_id": chat_id, "text": text[:120]},
+            preview=text,
+        )
 
 
 def _payload() -> dict:

@@ -12,6 +12,7 @@
     <div class="header-actions">
       <span id="status" class="status">connecting&hellip;</span>
       <button id="refresh">Refresh</button>
+      <button id="settings-btn">Settings</button>
       <button id="clear" class="danger">Clear all</button>
     </div>
   </header>
@@ -27,18 +28,6 @@
           </li>
         {% endfor %}
       </ul>
-      <div class="endpoints">
-        <h3>Endpoints</h3>
-        <ul>
-          {% for channel in channels %}
-            <li><strong>{{ channel.name }}</strong>
-              <ul>
-                {% for ep in channel.endpoints %}<li><code>{{ ep }}</code></li>{% endfor %}
-              </ul>
-            </li>
-          {% endfor %}
-        </ul>
-      </div>
     </aside>
 
     <section id="messages">
@@ -49,6 +38,40 @@
       <p class="empty">Select a message to view its contents.</p>
     </section>
   </main>
+
+  <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-label="Channel settings">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-panel">
+      <header class="modal-header">
+        <h2>Channel settings &amp; setup</h2>
+        <button id="settings-close" class="modal-close" aria-label="Close" data-close>&times;</button>
+      </header>
+      <div class="modal-body">
+        {% for channel in channels %}
+          <section class="setup-channel">
+            <h3>{{ channel.name }}{% if channel.supports_reply() %} <span class="badge">reply</span>{% endif %}</h3>
+            <p class="setup-desc">{{ channel.description }}</p>
+            <h4>Capture endpoints</h4>
+            <ul>
+              {% for ep in channel.endpoints %}<li><code>{{ ep }}</code></li>{% endfor %}
+            </ul>
+            {% if channel.reply_setup %}
+              <h4>Simulate user replies</h4>
+              <ul class="setup-reply">
+                {% for line in channel.reply_setup %}<li>{{ line }}</li>{% endfor %}
+              </ul>
+            {% endif %}
+            {% if channel.settings %}
+              <h4>Configuration</h4>
+              <div class="setup-settings" data-settings-for="{{ channel.name }}">
+                <p class="setup-desc">Loading&hellip;</p>
+              </div>
+            {% endif %}
+          </section>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

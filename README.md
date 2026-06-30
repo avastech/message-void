@@ -23,7 +23,7 @@ The channel system is plug-in based: each provider is a small Python module in `
 | `pusher`   | `POST /pusher/apps/<app_id>/events`, `POST /pusher/publish_api/v1/instances/<i>/publishes` |
 | `mailgun`  | `POST /mailgun/v3/<domain>/messages`                                                       |
 | `postmark` | `POST /postmark/email`, `POST /postmark/email/batch`                                       |
-| `webhook`  | `ANY /webhook/<tag>` � generic catch-all                                                   |
+| `webhook`  | `ANY /webhook/<tag>` — generic catch-all                                                   |
 
 ## Usage
 
@@ -40,7 +40,7 @@ Three things start:
 | `5000` | Web UI **and** REST/SSE API                               |
 | `1025` | SMTP listener (point Laravel's `MAIL_HOST`/`MAIL_PORT` here) |
 
-Open <http://localhost:5000> for the UI. The sidebar lists every loaded channel with live message counts and shows the exact endpoint paths each one accepts.
+Open <http://localhost:5000> for the UI. The sidebar lists every loaded channel with live message counts; the **Settings** button (top right) shows each channel's exact capture endpoints and its reply/inbound setup.
 
 ### Point Laravel at it
 
@@ -58,14 +58,14 @@ MAIL_ENCRYPTION=null
 # Slack incoming webhook
 SLACK_WEBHOOK_URL=http://message-void:5000/slack/services/T0/B0/XYZ
 
-# Mailgun mail driver (config/services.php ? mailgun.endpoint)
+# Mailgun mail driver (config/services.php → mailgun.endpoint)
 MAILGUN_ENDPOINT=message-void:5000/mailgun
 
-# Postmark mail driver (config/services.php ? postmark.base_url)
+# Postmark mail driver (config/services.php → postmark.base_url)
 POSTMARK_BASE_URL=http://message-void:5000/postmark
 ```
 
-For Telegram, Discord, Twilio, Vonage, Pusher, etc., override the channel package's `base_uri` (every package exposes one) and use the matching path under `http://message-void:5000/`. The full list is in the UI sidebar and at `/api/channels`.
+For Telegram, Discord, Twilio, Vonage, Pusher, etc., override the channel package's `base_uri` (every package exposes one) and use the matching path under `http://message-void:5000/`. The full list is in the UI's **Settings** panel and at `/api/channels`.
 
 ### REST + SSE API
 
@@ -74,14 +74,75 @@ For Telegram, Discord, Twilio, Vonage, Pusher, etc., override the channel packag
 | GET    | `/api/messages`                 | List captured messages (newest first); `?channel=`, `?limit=`, `?offset=` |
 | GET    | `/api/messages/<id>`            | Fetch one message                        |
 | DELETE | `/api/messages/<id>`            | Delete one message                       |
+| POST   | `/api/messages/<id>/reply`      | Simulate a user reply — deliver an inbound event to your app (see [Replies](#replying-simulating-an-inbound-user-reply)) |
 | DELETE | `/api/messages`                 | Clear all messages; `?channel=` to clear one channel only |
 | GET    | `/api/channels`                 | Channels with descriptions and counts    |
+| GET    | `/api/settings`                 | Per-channel settings, their values and source (env/runtime/unset) |
+| PUT    | `/api/settings`                 | Set/clear runtime overrides for settings not pinned by an env var |
 | GET    | `/api/stream`                   | Server-Sent-Events stream of new messages |
 | GET    | `/healthz`                      | Liveness probe                           |
 
+### Replying (simulating an inbound user reply)
+
+Capture is one-directional: your app sends a notification and Message Void stores
+it. A **reply** reverses that flow — it builds the provider's *inbound* webhook
+payload and delivers it to a URL your app exposes, so the app receives it exactly
+as it would a real reply from the recipient. Use it to exercise the full
+round trip (e.g. an SMS auto-responder, a `STOP` opt-out, a chatbot flow).
+
+In the web UI, open a captured message from a reply-capable channel and use the
+**Simulate a user reply** box. Or call the API directly:
+
+```sh
+curl -X POST http://localhost:5000/api/messages/<id>/reply \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "STOP"}'
+```
+
+The recorded inbound message appears in the UI tagged `inbound`, and the response
+reports the status your app returned:
+
+```json
+{ "delivered_to": "http://app/twilio/inbound", "app_status": 200, "message_id": "…" }
+```
+
+Because Message Void must now reach *out* to your app, reply-capable channels need
+to know where inbound goes. Currently implemented:
+
+| Channel    | Config                                                                                  |
+| ---------- | --------------------------------------------------------------------------------------- |
+| `twilio`   | `MESSAGE_VOID_TWILIO_INBOUND_URL` — your number's "A message comes in" webhook. Optional `MESSAGE_VOID_TWILIO_AUTH_TOKEN` adds a valid `X-Twilio-Signature`. Swaps `From`/`To`. |
+| `vonage`   | `MESSAGE_VOID_VONAGE_INBOUND_URL` — your number's inbound-SMS webhook. Sends `msisdn`/`to` (original recipient becomes the sender). |
+| `slack`    | `MESSAGE_VOID_SLACK_INBOUND_URL` — your app's Events API Request URL. Optional `MESSAGE_VOID_SLACK_SIGNING_SECRET` adds a valid `X-Slack-Signature`. Replies into the original channel. |
+| `telegram` | `MESSAGE_VOID_TELEGRAM_INBOUND_URL` — your bot's **webhook** URL. Optional `MESSAGE_VOID_TELEGRAM_SECRET_TOKEN` sets `X-Telegram-Bot-Api-Secret-Token`. ⚠️ Webhook mode only — long-polling (`getUpdates`) apps won't receive it. |
+| `discord`  | `MESSAGE_VOID_DISCORD_INBOUND_URL` — POSTs a `MESSAGE_CREATE` event. ⚠️ Real Discord delivers over the gateway **websocket**, which this tool doesn't emulate; use only if your test setup exposes an HTTP receiver. Webhook-origin captures carry no channel, so pass `channel_id`. |
+
+These values are read through a small config layer: an environment variable always
+wins. When one is **not** set via env, you can supply it at runtime from the
+**Settings** panel (the "Configuration" section under each channel) — handy for
+trying replies without editing your env/compose. Env-pinned values appear locked
+("set via env var") and can't be changed from the UI; secrets are write-only
+(never echoed back). Runtime overrides live in memory only — environment variables
+remain the durable way to configure the service. The same data is available at:
+
+```
+GET /api/settings                       # current settings, sources, locked flags
+PUT /api/settings  {"KEY": "value"}     # set/clear runtime overrides (env-pinned rejected)
+```
+
+Per-reply overrides can also be passed in the POST body alongside `text` (e.g. `url`,
+`from`/`to`, `channel`, `chat_id`, `channel_id`, signing secrets). Channels that
+can't push inbound (SMTP, Mailgun, Postmark, Pusher) omit the capability and show
+no reply box.
+
+To add replies to another channel, override `supports_reply()` and `build_reply()`
+on its `Channel` subclass (see [Adding a new channel](#adding-a-new-channel)),
+returning a `PushReply` describing the inbound request; the dispatcher sends it
+and records the inbound message.
+
 ### Adding a new channel
 
-Each channel is one Python file in `message_void/channels/`. The package autodiscovers them on startup � no other wiring is needed:
+Each channel is one Python file in `message_void/channels/`. The package autodiscovers them on startup — no other wiring is needed:
 
 ```python
 # message_void/channels/pushover.py
